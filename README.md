@@ -1,3 +1,5 @@
+### This is a completely vide-coded package for my personal use. Don't expect maitenence or updates.
+
 # fusion-nix
 
 Run Autodesk Fusion 360 on Nix and NixOS via Wine.
