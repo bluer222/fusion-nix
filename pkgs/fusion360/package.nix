@@ -14,6 +14,7 @@
 , gawk
 , xdg-utils
 , procps
+, zenity
 }:
 let
   wine = wineWow64Packages.stableFull;
@@ -31,11 +32,12 @@ let
     gawk
     xdg-utils
     procps
+    zenity
   ];
 in
 stdenvNoCC.mkDerivation rec {
   pname = "fusion360";
-  version = "0.2.0";
+  version = "0.2.1";
 
   src = ./.;
 

@@ -7,7 +7,7 @@
 # directly from Autodesk on first run. You must have a valid Autodesk account/license.
 set -euo pipefail
 
-VERSION="0.2.0"
+VERSION="0.2.1"
 
 # Upstream download endpoints
 FUSION360_INSTALLER_URL="${FUSION360_INSTALLER_URL:-https://dl.appstreaming.autodesk.com/production/installers/Fusion%20Admin%20Install.exe}"
@@ -36,9 +36,143 @@ export WINETRICKS_UPDATE_CHECK=0
 export WINETRICKS_LATEST_VERSION_CHECK=disabled
 export DXVK_LOG_LEVEL="${DXVK_LOG_LEVEL:-none}"
 
+# GUI progress state
+GUI_ENABLED=0
+GUI_TEMP_DIR=""
+GUI_PIPE=""
+GUI_PID=""
+
 log_info() { printf '\033[0;32m[info]\033[0m %s\n' "$*"; }
 log_warn() { printf '\033[0;33m[warn]\033[0m %s\n' "$*" >&2; }
 log_err()  { printf '\033[0;31m[error]\033[0m %s\n' "$*" >&2; }
+
+# -----------------------------------------------------------------------------
+# GUI Progress System (Zenity)
+# -----------------------------------------------------------------------------
+
+gui_init() {
+  if [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" && -z "${FUSION360_NOGUI:-}" ]] && command -v zenity >/dev/null 2>&1; then
+    GUI_ENABLED=1
+    GUI_TEMP_DIR="$(mktemp -d -t fusion360-ui-XXXXXX)"
+    GUI_PIPE="$GUI_TEMP_DIR/progress.pipe"
+    mkfifo "$GUI_PIPE"
+
+    zenity --progress \
+      --title="Autodesk Fusion 360 Setup" \
+      --text="Preparing Autodesk Fusion 360 installation..." \
+      --percentage=0 \
+      --auto-close \
+      --no-cancel \
+      --width=520 \
+      --icon-name=fusion360 <"$GUI_PIPE" &
+    GUI_PID=$!
+
+    # Keep writing end open on descriptor 3
+    exec 3>"$GUI_PIPE"
+  fi
+}
+
+gui_step() {
+  local pct="$1"
+  local msg="$2"
+  log_info "$msg"
+  if [[ $GUI_ENABLED -eq 1 ]]; then
+    if [[ -n "$pct" ]]; then
+      echo "$pct" >&3 2>/dev/null || true
+    fi
+    if [[ -n "$msg" ]]; then
+      echo "# $msg" >&3 2>/dev/null || true
+    fi
+  fi
+}
+
+gui_download() {
+  local name="$1" dest="$2" primary_url="$3" fallback_url="${4:-}"
+  local start_pct="${5:-0}" end_pct="${6:-100}"
+
+  if [[ -s "$dest" ]]; then
+    log_info "$name already downloaded, reusing $dest"
+    gui_step "$end_pct" "$name ready (cached)"
+    return 0
+  fi
+
+  log_info "Downloading $name..."
+  gui_step "$start_pct" "Downloading $name..."
+
+  local tmp_dest="${dest}.tmp.$$"
+
+  download_curl_stream() {
+    local target_url="$1"
+    if [[ $GUI_ENABLED -eq 1 ]]; then
+      # Stream curl progress bar and scale percentage within [start_pct, end_pct]
+      curl -fL --retry 3 --connect-timeout 15 -# -o "$tmp_dest" "$target_url" 2>&1 \
+        | tr '\r' '\n' \
+        | sed -un 's/.*\ \([0-9]\{1,3\}\)\.[0-9]%.*/\1/p' \
+        | while read -r p; do
+            local scaled=$(( start_pct + (p * (end_pct - start_pct) / 100) ))
+            echo "$scaled" >&3 2>/dev/null || true
+            echo "# Downloading $name ($p%)..." >&3 2>/dev/null || true
+          done
+    else
+      curl -fL --retry 3 --connect-timeout 15 --progress-bar -o "$tmp_dest" "$target_url"
+    fi
+  }
+
+  if ! download_curl_stream "$primary_url" || [[ ! -s "$tmp_dest" ]]; then
+    if [[ -n "$fallback_url" ]]; then
+      log_warn "Primary download URL failed, attempting fallback URL..."
+      gui_step "$start_pct" "Primary download failed, attempting fallback for $name..."
+      if ! download_curl_stream "$fallback_url" || [[ ! -s "$tmp_dest" ]]; then
+        rm -f "$tmp_dest"
+        log_err "Failed to download $name from all sources"
+        return 1
+      fi
+    else
+      rm -f "$tmp_dest"
+      log_err "Failed to download $name from $primary_url"
+      return 1
+    fi
+  fi
+
+  mv -f "$tmp_dest" "$dest"
+  gui_step "$end_pct" "Downloaded $name successfully."
+}
+
+gui_close() {
+  if [[ $GUI_ENABLED -eq 1 ]]; then
+    echo "100" >&3 2>/dev/null || true
+    echo "# Setup complete! Launching Autodesk Fusion 360..." >&3 2>/dev/null || true
+    sleep 1
+    exec 3>&- 2>/dev/null || true
+    if [[ -n "$GUI_PID" ]]; then
+      wait "$GUI_PID" 2>/dev/null || true
+    fi
+    if [[ -n "$GUI_TEMP_DIR" ]]; then
+      rm -rf "$GUI_TEMP_DIR" 2>/dev/null || true
+    fi
+    GUI_ENABLED=0
+  fi
+}
+
+gui_error() {
+  local msg="$1"
+  log_err "$msg"
+  if [[ $GUI_ENABLED -eq 1 ]]; then
+    exec 3>&- 2>/dev/null || true
+    zenity --error \
+      --title="Autodesk Fusion 360 Setup Error" \
+      --text="$msg\n\nDetailed installation logs are located in:\n$LOGS" \
+      --width=480 2>/dev/null || true
+    if [[ -n "$GUI_TEMP_DIR" ]]; then
+      rm -rf "$GUI_TEMP_DIR" 2>/dev/null || true
+    fi
+    GUI_ENABLED=0
+  fi
+}
+
+# -----------------------------------------------------------------------------
+# CLI Usage & Verification Helpers
+# -----------------------------------------------------------------------------
 
 usage() {
   cat <<EOF
@@ -67,6 +201,7 @@ Environment Variables:
   FUSION360_DATA_DIR    Base data directory (default: \$XDG_DATA_HOME/fusion360)
   FUSION360_PREFIX      Wine prefix path (default: \$DATA_DIR/wineprefixes/default)
   FUSION360_DXVK=0      Disable DXVK and use OpenGL fallback
+  FUSION360_NOGUI=1     Disable graphical setup dialogs and progress bars
   WINEDEBUG             Wine debug channels (default: -all,-d3d)
   FUSION360_INSTALLER_URL Override Autodesk Fusion installer URL
   FUSION360_WEBVIEW2_URL  Override Microsoft Edge WebView2 installer URL
@@ -78,24 +213,6 @@ EOF
 
 ensure_dirs() {
   mkdir -p "$PREFIX" "$DOWNLOADS" "$LOGS"
-}
-
-download_file() {
-  local name="$1" dest="$2" primary_url="$3" secondary_url="${4:-}"
-  if [[ -s "$dest" ]]; then
-    log_info "$name already downloaded, reusing $dest"
-    return 0
-  fi
-  log_info "Downloading $name ..."
-  if ! curl -fL --retry 3 --connect-timeout 15 --progress-bar -o "$dest" "$primary_url"; then
-    if [[ -n "$secondary_url" ]]; then
-      log_warn "Primary download URL failed, attempting fallback URL..."
-      curl -fL --retry 3 --connect-timeout 15 --progress-bar -o "$dest" "$secondary_url"
-    else
-      log_err "Failed to download $name from $primary_url"
-      return 1
-    fi
-  fi
 }
 
 find_launcher() {
@@ -113,6 +230,10 @@ find_idmgr() {
 is_installed() {
   [[ -n "$(find_launcher)" ]]
 }
+
+# -----------------------------------------------------------------------------
+# Wine Prefix Configuration & Installation Steps
+# -----------------------------------------------------------------------------
 
 wineboot_init() {
   log_info "Initializing Wine prefix at $PREFIX"
@@ -132,8 +253,8 @@ setup_sandbox() {
 }
 
 install_winetricks_deps() {
-  log_info "Installing core runtime dependencies via winetricks (this may take several minutes)..."
-  log_info "Logs are written to $LOGS/winetricks.log"
+  log_info "Installing core runtime dependencies via winetricks (this takes a few minutes)..."
+  log_info "Follow detailed logs in $LOGS/winetricks.log"
   # Verbs required for Fusion 360: .NET 4.8, Visual C++ 2022, XML parsing, core and CJK fonts
   winetricks -q atmlib gdiplus corefonts cjkfonts dotnet20 dotnet48 \
     msxml4 msxml6 vcrun2022 fontsmooth=rgb winhttp win10 \
@@ -160,9 +281,8 @@ configure_registry() {
   wineserver -w >>"$LOGS/registry.log" 2>&1 || true
 }
 
-install_webview2() {
-  local installer="$DOWNLOADS/MicrosoftEdgeWebView2RuntimeInstallerX64.exe"
-  download_file "Microsoft Edge WebView2 runtime" "$installer" "$WEBVIEW2_URL" "$WEBVIEW2_BACKUP_URL"
+run_webview2_installer() {
+  local installer="$1"
   log_info "Installing Microsoft Edge WebView2 runtime (pinned v109 build)"
   # WebView2 installer works best when wine reports win7 during setup
   wine winecfg -v win7 >>"$LOGS/webview2.log" 2>&1 || true
@@ -225,14 +345,16 @@ setup_graphics() {
   wineserver -w >>"$LOGS/dxvk.log" 2>&1 || true
 }
 
-install_fusion_installer() {
-  local installer="$DOWNLOADS/FusionClientInstaller.exe"
-  download_file "Autodesk Fusion installer" "$installer" "$FUSION360_INSTALLER_URL"
-  log_info "Executing Autodesk installer (quiet mode, multi-pass)..."
-  log_info "Follow progress in $LOGS/fusion-install.log"
-
-  # Autodesk's installer requires a first extraction pass and a second configuration pass
+run_fusion_pass_1() {
+  local installer="$1"
+  log_info "Running Autodesk installer (pass 1/2 - extracting client)..."
   timeout -k 12m 10m wine "$installer" --quiet >>"$LOGS/fusion-install.log" 2>&1 || true
+  wineserver -w >>"$LOGS/fusion-install.log" 2>&1 || true
+}
+
+run_fusion_pass_2() {
+  local installer="$1"
+  log_info "Running Autodesk installer (pass 2/2 - configuring components)..."
   sleep 3
   timeout -k 6m 4m wine "$installer" --quiet >>"$LOGS/fusion-install.log" 2>&1 || true
   wineserver -w >>"$LOGS/fusion-install.log" 2>&1 || true
@@ -257,7 +379,7 @@ apply_post_install_patches() {
   # 2. Patched siappdll.dll for 3Dconnexion SpaceMouse
   if [[ -f "$RESOURCES_DIR/siappdll.dll" ]]; then
     local qt_target
-    qt_target="$(find "$PREFIX" -name 'Qt6WebEngineCore.dll' -printf "%T+ %p\n" 2>/dev/null | sort -r | head -n 1 | sed -r 's/^[^ ]+ //')"
+    qt_target="$(find "$PREFIX" -name 'Qt6WebEngineCore.dll' -printf "%T+ %p\n" 2>/dev/null | sort -r | head -n 1 | sed -r 's/^[^ ]+ //' || true)"
     if [[ -n "$qt_target" ]]; then
       local target_dir
       target_dir="$(dirname "$qt_target")"
@@ -271,7 +393,6 @@ apply_post_install_patches() {
 }
 
 register_desktop_handlers() {
-  # Register the adskidmgr-opener desktop entry for the user if xdg-mime exists
   if command -v xdg-mime >/dev/null 2>&1; then
     local user_apps="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
     mkdir -p "$user_apps"
@@ -283,26 +404,72 @@ register_desktop_handlers() {
   fi
 }
 
+# -----------------------------------------------------------------------------
+# Main Application Actions
+# -----------------------------------------------------------------------------
+
 do_install() {
   ensure_dirs
+
+  # If launched from GUI without an interactive terminal, prompt before the initial ~15 min install
+  if [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" && -z "${FUSION360_NOGUI:-}" ]] && ! [ -t 0 ] && command -v zenity >/dev/null 2>&1; then
+    if ! zenity --question \
+      --title="Autodesk Fusion 360 Setup" \
+      --text="Autodesk Fusion 360 is not installed yet.\n\nWould you like to install it now?\n\nThis will download ~2 GB of dependencies and set up an isolated Wine prefix in:\n$PREFIX\n\nInstallation typically takes 5–15 minutes." \
+      --ok-label="Install" \
+      --cancel-label="Cancel" \
+      --width=480 2>/dev/null; then
+      log_info "Installation canceled by user."
+      exit 0
+    fi
+  fi
+
+  gui_init
+
+  gui_step 5 "Step 1/8: Initializing Wine prefix..."
   wineboot_init
+
+  gui_step 12 "Step 2/8: Configuring prefix sandbox mode..."
   setup_sandbox
+
+  gui_step 20 "Step 3/8: Installing runtime libraries (.NET 4.8, VC++ 2022, fonts)..."
   install_winetricks_deps
+
+  gui_step 48 "Step 4/8: Applying Wine compatibility registry tweaks..."
   configure_registry
-  install_webview2
+
+  local webview_installer="$DOWNLOADS/MicrosoftEdgeWebView2RuntimeInstallerX64.exe"
+  gui_download "WebView2 runtime" "$webview_installer" "$WEBVIEW2_URL" "$WEBVIEW2_BACKUP_URL" 50 60
+
+  gui_step 60 "Step 5/8: Installing Microsoft Edge WebView2 runtime..."
+  run_webview2_installer "$webview_installer"
+
+  gui_step 66 "Step 6/8: Configuring graphics pipeline (DXVK / Vulkan)..."
   setup_graphics
-  install_fusion_installer
+
+  local fusion_installer="$DOWNLOADS/FusionClientInstaller.exe"
+  gui_download "Autodesk Fusion installer" "$fusion_installer" "$FUSION360_INSTALLER_URL" "" 70 82
+
+  gui_step 82 "Step 7/8: Running Autodesk installer (pass 1/2 - extracting)..."
+  run_fusion_pass_1 "$fusion_installer"
+
+  gui_step 90 "Step 7/8: Finalizing Autodesk installer (pass 2/2)..."
+  run_fusion_pass_2 "$fusion_installer"
+
+  gui_step 95 "Step 8/8: Applying SpaceMouse & system DLL compatibility fixes..."
   apply_post_install_patches
+
+  gui_step 98 "Step 8/8: Registering Autodesk Identity Manager SSO handler..."
   register_desktop_handlers
 
   if is_installed; then
     local launcher
     launcher="$(find_launcher)"
-    log_info "Autodesk Fusion 360 successfully installed!"
-    log_info "Launcher: $launcher"
+    log_info "Autodesk Fusion 360 successfully installed: $launcher"
+    gui_close
   else
-    log_warn "Installation finished but Fusion360.exe was not detected in $PREFIX"
-    log_warn "Check $LOGS/fusion-install.log for diagnostic information."
+    local err="Installation finished but Fusion360.exe was not detected in $PREFIX"
+    gui_error "$err"
     return 1
   fi
 }
@@ -319,6 +486,11 @@ do_launch() {
   register_desktop_handlers
   log_info "Launching Autodesk Fusion 360..."
   log_info "Executable: $launcher"
+
+  # Display transient desktop notification if in graphical session
+  if [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" && -z "${FUSION360_NOGUI:-}" ]] && command -v zenity >/dev/null 2>&1; then
+    zenity --notification --text="Starting Autodesk Fusion 360..." 2>/dev/null || true
+  fi
 
   FUSION_IDSDK=false \
   DXVK_LOG_LEVEL="${DXVK_LOG_LEVEL:-none}" \
@@ -349,11 +521,18 @@ do_idmgr() {
 
 do_update() {
   ensure_dirs
-  log_info "Updating Autodesk Fusion 360..."
+  gui_init
+  gui_step 10 "Updating Autodesk Fusion 360..."
   local installer="$DOWNLOADS/FusionClientInstaller.exe"
   rm -f "$installer"
-  install_fusion_installer
+  gui_download "Autodesk Fusion installer" "$installer" "$FUSION360_INSTALLER_URL" "" 20 60
+  gui_step 60 "Running update (pass 1/2)..."
+  run_fusion_pass_1 "$installer"
+  gui_step 85 "Finalizing update (pass 2/2)..."
+  run_fusion_pass_2 "$installer"
+  gui_step 95 "Re-applying compatibility patches..."
   apply_post_install_patches
+  gui_close
   log_info "Update complete."
 }
 
@@ -388,6 +567,7 @@ do_status() {
   echo "Resources:       $RESOURCES_DIR"
   echo "Wine Version:    $(wine --version 2>/dev/null || echo "not found")"
   echo "DXVK Enabled:    ${FUSION360_DXVK:-1}"
+  echo "Zenity Available: $(command -v zenity >/dev/null 2>&1 && echo "Yes" || echo "No")"
 
   local launcher idmgr
   launcher="$(find_launcher)"
@@ -407,7 +587,17 @@ do_status() {
   fi
 }
 
+# -----------------------------------------------------------------------------
+# Main CLI Dispatcher
+# -----------------------------------------------------------------------------
+
 main() {
+  # Handle global --no-gui flag
+  if [[ "${1:-}" == "--no-gui" ]]; then
+    export FUSION360_NOGUI=1
+    shift
+  fi
+
   if [[ $# -eq 0 ]]; then
     ensure_dirs
     if is_installed; then
