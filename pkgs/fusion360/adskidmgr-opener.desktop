@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=adskidmgr Scheme Handler
+Comment=Autodesk Identity Manager SSO protocol handler
+Exec=fusion360 idmgr %u
+Icon=fusion360
+MimeType=x-scheme-handler/adskidmgr;
+NoDisplay=true
+StartupNotify=false
+Terminal=false
+Categories=Application;

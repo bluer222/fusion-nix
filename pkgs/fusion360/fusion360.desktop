@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Autodesk Fusion 360
+GenericName=CAD Application
+Comment=Autodesk Fusion is a cloud-based 3D modeling, CAD, CAM, and PCB software platform for product design and manufacturing.
+Exec=fusion360
+Icon=fusion360
+Type=Application
+Categories=Education;Engineering;Graphics;Science;
+Keywords=3D;CAD;CAM;Design;Modeling;Autodesk;Fusion;
+StartupNotify=true
+Terminal=false
+StartupWMClass=fusion360.exe
