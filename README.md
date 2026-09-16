@@ -99,6 +99,7 @@ fusion360                # Launch Fusion 360 (installs automatically on first ru
 fusion360 run [args...]  # Launch Fusion 360 with arguments passed to Fusion360.exe
 fusion360 install        # Run the full automated prefix setup and installer
 fusion360 update         # Download the latest installer and run an in-prefix update
+fusion360 repair         # Verify and re-install prefix dependencies (VC++, fonts, DXVK)
 fusion360 status         # Show prefix path, Wine version, and installation status
 fusion360 uninstall      # Interactive uninstaller (deletes the data directory)
 fusion360 uninstall -f   # Force uninstall without confirmation prompt

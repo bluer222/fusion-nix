@@ -1,5 +1,6 @@
 { lib
 , stdenvNoCC
+, runCommand
 , makeWrapper
 , bash
 , wineWow64Packages
@@ -17,7 +18,23 @@
 , zenity
 }:
 let
-  wine = wineWow64Packages.stableFull;
+  wineBase = wineWow64Packages.stableFull;
+
+  # winetricks strictly expects 'wine64' when managing 64-bit prefixes.
+  # Wine 9/10/11 wow64 builds only ship 'wine', which caused winetricks to fail on all verbs.
+  wine = runCommand "wine-wow64-compat" { inherit (wineBase) meta; } ''
+    mkdir -p $out/bin
+    for f in ${wineBase}/bin/*; do
+      ln -s "$f" $out/bin/
+    done
+    ln -sf "${wineBase}/bin/wine" $out/bin/wine64
+    for dir in include lib share; do
+      if [ -d "${wineBase}/$dir" ]; then
+        ln -s "${wineBase}/$dir" $out/
+      fi
+    done
+  '';
+
   runtimePath = lib.makeBinPath [
     bash
     wine
@@ -63,9 +80,10 @@ stdenvNoCC.mkDerivation rec {
     wrapProgram $out/bin/fusion360 \
       --prefix PATH : "${runtimePath}" \
       --set WINE "${wine}/bin/wine" \
+      --set WINE64 "${wine}/bin/wine64" \
       --set WINELOADER "${wine}/bin/wine" \
       --set WINESERVER "${wine}/bin/wineserver" \
-      --set WINEDLLPATH "${wine}/lib/wine"
+      --set WINEDLLPATH "${wineBase}/lib/wine"
 
     # Install desktop entries
     install -Dm644 $src/fusion360.desktop $out/share/applications/fusion360.desktop

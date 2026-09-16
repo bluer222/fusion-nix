@@ -186,6 +186,7 @@ Commands:
   run [ARGS]...         Launch Fusion 360, passing ARGS to Fusion360.exe
   install               Run full prefix initialization and install Fusion 360
   update                Download latest installer and run in-prefix update
+  repair                Verify and re-install prefix dependencies and registry tweaks
   uninstall [--force]   Remove Fusion 360 wine prefix and data directory
   status                Show prefix configuration, launcher path, and status
   idmgr <URL>           Autodesk Identity Manager SSO callback handler (adskidmgr://)
@@ -255,13 +256,24 @@ setup_sandbox() {
 install_winetricks_deps() {
   log_info "Installing core runtime dependencies via winetricks (this takes a few minutes)..."
   log_info "Follow detailed logs in $LOGS/winetricks.log"
-  # Verbs required for Fusion 360: .NET 4.8, Visual C++ 2022, XML parsing, core and CJK fonts
-  winetricks -q atmlib gdiplus corefonts cjkfonts dotnet20 dotnet48 \
-    msxml4 msxml6 vcrun2022 fontsmooth=rgb winhttp win10 \
-    >>"$LOGS/winetricks.log" 2>&1
-  # Upstream note: repeat cjkfonts if needed and lock version to Windows 11
-  winetricks -q cjkfonts >>"$LOGS/winetricks.log" 2>&1 || true
-  winetricks -q win11 >>"$LOGS/winetricks.log" 2>&1
+
+  # Run winetricks in discrete, resilient batches so failure of one optional verb
+  # doesn't prevent critical runtimes (VC++, XML, GDI+, fonts) from installing.
+  log_info "Winetricks [1/5]: Setting Windows 10 baseline..."
+  winetricks -q win10 >>"$LOGS/winetricks.log" 2>&1 || true
+
+  log_info "Winetricks [2/5]: Installing Visual C++ and XML runtimes (vcrun2022, msxml4, msxml6)..."
+  winetricks -q vcrun2022 msxml4 msxml6 >>"$LOGS/winetricks.log" 2>&1 || true
+
+  log_info "Winetricks [3/5]: Installing graphics and network libraries (atmlib, gdiplus, winhttp, fontsmooth)..."
+  winetricks -q atmlib gdiplus fontsmooth=rgb winhttp >>"$LOGS/winetricks.log" 2>&1 || true
+
+  log_info "Winetricks [4/5]: Installing core and CJK fonts..."
+  winetricks -q corefonts cjkfonts >>"$LOGS/winetricks.log" 2>&1 || true
+
+  log_info "Winetricks [5/5]: Locking Windows 11 environment..."
+  winetricks -q win11 >>"$LOGS/winetricks.log" 2>&1 || true
+
   wineserver -w >>"$LOGS/winetricks.log" 2>&1 || true
 }
 
@@ -317,7 +329,7 @@ setup_graphics() {
 
   if [[ "$use_dxvk" == "1" ]]; then
     log_info "Configuring graphics driver: DXVK (DirectX 11 over Vulkan)"
-    winetricks -q dxvk >>"$LOGS/dxvk.log" 2>&1
+    winetricks -q dxvk >>"$LOGS/dxvk.log" 2>&1 || true
     if [[ -f "$RESOURCES_DIR/DXVK.reg" ]]; then
       wine regedit /S "$RESOURCES_DIR/DXVK.reg" >>"$LOGS/dxvk.log" 2>&1 || true
     fi
@@ -536,6 +548,19 @@ do_update() {
   log_info "Update complete."
 }
 
+do_repair() {
+  ensure_dirs
+  log_info "Repairing and verifying Wine prefix dependencies for Autodesk Fusion 360..."
+  wineboot_init
+  setup_sandbox
+  install_winetricks_deps
+  configure_registry
+  setup_graphics
+  apply_post_install_patches
+  register_desktop_handlers
+  log_info "Prefix repair and dependency verification complete."
+}
+
 do_uninstall() {
   local force=0
   if [[ "${1:-}" == "--force" || "${1:-}" == "-f" ]]; then
@@ -619,6 +644,8 @@ main() {
       do_install ;;
     update)
       do_update ;;
+    repair)
+      do_repair ;;
     uninstall)
       shift; do_uninstall "$@" ;;
     status)
