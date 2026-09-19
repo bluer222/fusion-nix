@@ -19,10 +19,12 @@ ensure_structure() {
 
   # Populate bundled upstream data & scripts from Nix store if missing or updated
   if [[ -d "$SHARE_DIR/data" ]]; then
-    cp -rf "$SHARE_DIR/data/bin/"* "$DATA_DIR/bin/" 2>/dev/null || true
-    chmod +x "$DATA_DIR/bin/"*.sh 2>/dev/null || true
-    cp -rf "$SHARE_DIR/data/downloads/"* "$DATA_DIR/downloads/" 2>/dev/null || true
-    cp -rf "$SHARE_DIR/data/resources/"* "$DATA_DIR/resources/" 2>/dev/null || true
+    chmod -R u+w "$DATA_DIR/bin" "$DATA_DIR/downloads" "$DATA_DIR/resources" 2>/dev/null || true
+    cp -rf --remove-destination "$SHARE_DIR/data/bin/"* "$DATA_DIR/bin/" 2>/dev/null || true
+    chmod -R u+w "$DATA_DIR/bin" "$DATA_DIR/downloads" "$DATA_DIR/resources" 2>/dev/null || true
+    chmod +x "$DATA_DIR/bin/"*.sh "$DATA_DIR/bin/spconvd" 2>/dev/null || true
+    cp -rf --remove-destination "$SHARE_DIR/data/downloads/"* "$DATA_DIR/downloads/" 2>/dev/null || true
+    cp -rf --remove-destination "$SHARE_DIR/data/resources/"* "$DATA_DIR/resources/" 2>/dev/null || true
     # Touch files so upstream download_file treats them as fresh (<7 days) and skips curl
     find "$DATA_DIR/downloads" "$DATA_DIR/bin" "$DATA_DIR/resources" -type f -exec touch {} + 2>/dev/null || true
   fi

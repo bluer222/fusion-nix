@@ -83,6 +83,16 @@ stdenvNoCC.mkDerivation rec {
       --replace-fail 'AUTODESK_ROOT_DIRECTORY="$HOME/.local/share/Autodesk-Unofficial"' \
                      'AUTODESK_ROOT_DIRECTORY="''${FUSION360_DATA_DIR:-''${XDG_DATA_HOME:-$HOME/.local/share}/fusion360}"'
 
+    # Also replace Autodesk-Unofficial in desktop template files
+    substituteInPlace files/setup/data/.desktop/*.desktop \
+      --replace-fail '$HOME/.local/share/Autodesk-Unofficial' \
+                     '$HOME/.local/share/fusion360'
+
+    # Guard spconvd call in launcher so missing/non-executable daemon doesn't abort startup
+    substituteInPlace files/setup/data/autodesk_fusion_launcher.sh \
+      --replace-fail '"$AUTODESK_ROOT_DIRECTORY/bin/spconvd"' \
+                     '[[ -x "$AUTODESK_ROOT_DIRECTORY/bin/spconvd" ]] && "$AUTODESK_ROOT_DIRECTORY/bin/spconvd" 2>/dev/null || true'
+
     # 2. Stub out package manager and distro checks in installer
     sed -i \
       -e 's|check_required_packages() {|check_required_packages() { return 0; }\n_orig_check_required_packages() {|' \
@@ -120,7 +130,13 @@ stdenvNoCC.mkDerivation rec {
     cp -rf files/setup/data/fix-navbar-flicker.sh $out/share/fusion360/data/bin/
     cp -rf files/setup/data/runner_update.sh $out/share/fusion360/data/bin/
     cp -rf files/setup/data/swap_desktop_files.sh $out/share/fusion360/data/bin/
-    chmod +x $out/share/fusion360/data/bin/*.sh
+
+    # Install stub spconvd executable (SpaceMouse daemon placeholder)
+    cat > $out/share/fusion360/data/bin/spconvd << 'EOF'
+#!/bin/sh
+exit 0
+EOF
+    chmod +x $out/share/fusion360/data/bin/*.sh $out/share/fusion360/data/bin/spconvd
 
     # Install driver options XMLs
     cp -rf files/setup/data/video_driver/DXVK/NMachineSpecificOptions.xml $out/share/fusion360/data/downloads/DXVK/
@@ -137,6 +153,20 @@ stdenvNoCC.mkDerivation rec {
       cp ${./resources/siappdll.dll} $out/share/fusion360/data/bin/siappdll-msvc.dll
     fi
 
+    # Inject runtime environment into standalone and sourced data scripts.
+    # Note: We do NOT use wrapProgram on these because wrapProgram replaces the script
+    # with an 'exec ...' wrapper, which terminates the parent shell when sourced (e.g. runner_update.sh).
+    for script in $out/share/fusion360/installer.sh $out/share/fusion360/data/bin/*.sh; do
+      sed -i '2i \
+export PATH="${runtimePath}:$PATH"\
+export WINE="${wine}/bin/wine"\
+export WINE64="${wine}/bin/wine64"\
+export WINELOADER="${wine}/bin/wine"\
+export WINESERVER="${wine}/bin/wineserver"\
+export WINEDLLPATH="${wineBase}/lib/wine"\
+' "$script"
+    done
+
     # Install wrapper entrypoint script
     install -Dm755 ${./fusion360-wrapper.sh} $out/bin/fusion360
     substituteInPlace $out/bin/fusion360 \
@@ -149,17 +179,6 @@ stdenvNoCC.mkDerivation rec {
       --set WINELOADER "${wine}/bin/wine" \
       --set WINESERVER "${wine}/bin/wineserver" \
       --set WINEDLLPATH "${wineBase}/lib/wine"
-
-    # Wrap the upstream scripts with the runtime environment
-    for script in $out/share/fusion360/installer.sh $out/share/fusion360/data/bin/*.sh; do
-      wrapProgram "$script" \
-        --prefix PATH : "${runtimePath}" \
-        --set WINE "${wine}/bin/wine" \
-        --set WINE64 "${wine}/bin/wine64" \
-        --set WINELOADER "${wine}/bin/wine" \
-        --set WINESERVER "${wine}/bin/wineserver" \
-        --set WINEDLLPATH "${wineBase}/lib/wine"
-    done
 
     # Desktop entries and icons
     install -Dm644 ${./fusion360.desktop} $out/share/applications/fusion360.desktop
