@@ -1,5 +1,6 @@
 { lib
 , stdenvNoCC
+, fetchFromGitea
 , runCommand
 , makeWrapper
 , bash
@@ -16,6 +17,8 @@
 , xdg-utils
 , procps
 , zenity
+, gettext
+, util-linux
 }:
 let
   wineBase = wineWow64Packages.stableFull;
@@ -50,15 +53,51 @@ let
     xdg-utils
     procps
     zenity
+    gettext
+    util-linux
   ];
 in
 stdenvNoCC.mkDerivation rec {
   pname = "fusion360";
-  version = "0.2.1";
+  version = "0.3.0";
 
-  src = ./.;
+  src = fetchFromGitea {
+    domain = "codeberg.org";
+    owner = "Lolig4";
+    repo = "Autodesk-Fusion-360-on-Linux";
+    rev = "c38e9832ccacf475cb97898d202c04409c3f18f8";
+    hash = "sha256-o+xblNt+Me8jYwa9cmVio5NDN7VMvK8S3RAWza674qU=";
+  };
 
   nativeBuildInputs = [ makeWrapper ];
+
+  postPatch = ''
+    patchShebangs files/
+
+    # 1. Substitute data directory to adhere to XDG standards
+    substituteInPlace files/setup/autodesk_fusion_installer_x86-64.sh \
+      files/setup/data/autodesk_fusion_launcher.sh \
+      files/setup/data/adskidmgr-opener.sh \
+      files/setup/data/fix-navbar-flicker.sh \
+      files/setup/data/runner_update.sh \
+      --replace-fail 'AUTODESK_ROOT_DIRECTORY="$HOME/.local/share/Autodesk-Unofficial"' \
+                     'AUTODESK_ROOT_DIRECTORY="''${FUSION360_DATA_DIR:-''${XDG_DATA_HOME:-$HOME/.local/share}/fusion360}"'
+
+    # 2. Stub out package manager and distro checks in installer
+    sed -i \
+      -e 's|check_required_packages() {|check_required_packages() { return 0; }\n_orig_check_required_packages() {|' \
+      -e 's|install_required_packages() {|install_required_packages() { return 0; }\n_orig_install_required_packages() {|' \
+      -e 's|check_secure_boot() {|check_secure_boot() { SECURE_BOOT=0; return 0; }\n_orig_check_secure_boot() {|' \
+      -e 's|check_ram() {|check_ram() { return 0; }\n_orig_check_ram() {|' \
+      -e 's|check_gpu_driver() {|check_gpu_driver() { if [[ "''${FUSION360_DXVK:-1}" == "0" ]]; then GPU_DRIVER="OpenGL"; else GPU_DRIVER="DXVK"; fi; GET_VRAM_MEGABYTES=4096; return 0; }\n_orig_check_gpu_driver() {|' \
+      -e 's|check_gpu_vram() {|check_gpu_vram() { return 0; }\n_orig_check_gpu_vram() {|' \
+      -e 's|check_disk_space() {|check_disk_space() { return 0; }\n_orig_check_disk_space() {|' \
+      -e 's|check_and_install_wine() {|check_and_install_wine() { WINE_STATUS=1; return 0; }\n_orig_check_and_install_wine() {|' \
+      -e 's|WINETRICKS="$AUTODESK_ROOT_DIRECTORY/bin/winetricks"|WINETRICKS="winetricks"|' \
+      -e 's|download_file "winetricks" "$WINETRICKS_URL" "$AUTODESK_ROOT_DIRECTORY/bin"|:|' \
+      -e 's|chmod +x "$AUTODESK_ROOT_DIRECTORY/bin/winetricks"|:|' \
+      files/setup/autodesk_fusion_installer_x86-64.sh
+  '';
 
   installPhase = ''
     runHook preInstall
@@ -66,17 +105,43 @@ stdenvNoCC.mkDerivation rec {
     mkdir -p $out/bin \
       $out/share/applications \
       $out/share/icons/hicolor/scalable/apps \
-      $out/share/fusion360/resources
+      $out/share/fusion360/data/bin \
+      $out/share/fusion360/data/downloads/DXVK \
+      $out/share/fusion360/data/downloads/OpenGL \
+      $out/share/fusion360/data/downloads/ViewportRefreshForcer \
+      $out/share/fusion360/data/resources/.desktop
 
-    # Copy bundled resources
-    cp -r $src/resources/* $out/share/fusion360/resources/
+    # Install patched upstream installer
+    install -Dm755 files/setup/autodesk_fusion_installer_x86-64.sh $out/share/fusion360/installer.sh
 
-    # Install launcher script with substituted resources path
-    install -Dm755 $src/fusion360.sh $out/bin/fusion360
+    # Install upstream data scripts
+    cp -rf files/setup/data/autodesk_fusion_launcher.sh $out/share/fusion360/data/bin/
+    cp -rf files/setup/data/adskidmgr-opener.sh $out/share/fusion360/data/bin/
+    cp -rf files/setup/data/fix-navbar-flicker.sh $out/share/fusion360/data/bin/
+    cp -rf files/setup/data/runner_update.sh $out/share/fusion360/data/bin/
+    cp -rf files/setup/data/swap_desktop_files.sh $out/share/fusion360/data/bin/
+    chmod +x $out/share/fusion360/data/bin/*.sh
+
+    # Install driver options XMLs
+    cp -rf files/setup/data/video_driver/DXVK/NMachineSpecificOptions.xml $out/share/fusion360/data/downloads/DXVK/
+    cp -rf files/setup/data/video_driver/OpenGL/NMachineSpecificOptions.xml $out/share/fusion360/data/downloads/OpenGL/
+
+    # Install ViewportRefreshForcer add-in
+    cp -rf files/setup/data/ViewportRefreshForcer/* $out/share/fusion360/data/downloads/ViewportRefreshForcer/
+
+    # Install desktop templates
+    cp -rf files/setup/data/.desktop/* $out/share/fusion360/data/resources/.desktop/
+
+    # Install SpaceMouse DLL from resources if present
+    if [ -f ${./resources/siappdll.dll} ]; then
+      cp ${./resources/siappdll.dll} $out/share/fusion360/data/bin/siappdll-msvc.dll
+    fi
+
+    # Install wrapper entrypoint script
+    install -Dm755 ${./fusion360-wrapper.sh} $out/bin/fusion360
     substituteInPlace $out/bin/fusion360 \
-      --replace-fail "@RESOURCES_DIR@" "$out/share/fusion360/resources"
+      --replace-fail "@SHARE_DIR@" "$out/share/fusion360"
 
-    # Wrap launcher with runtime dependencies and explicit Wine environment
     wrapProgram $out/bin/fusion360 \
       --prefix PATH : "${runtimePath}" \
       --set WINE "${wine}/bin/wine" \
@@ -85,12 +150,22 @@ stdenvNoCC.mkDerivation rec {
       --set WINESERVER "${wine}/bin/wineserver" \
       --set WINEDLLPATH "${wineBase}/lib/wine"
 
-    # Install desktop entries
-    install -Dm644 $src/fusion360.desktop $out/share/applications/fusion360.desktop
-    install -Dm644 $src/adskidmgr-opener.desktop $out/share/applications/adskidmgr-opener.desktop
+    # Wrap the upstream scripts with the runtime environment
+    for script in $out/share/fusion360/installer.sh $out/share/fusion360/data/bin/*.sh; do
+      wrapProgram "$script" \
+        --prefix PATH : "${runtimePath}" \
+        --set WINE "${wine}/bin/wine" \
+        --set WINE64 "${wine}/bin/wine64" \
+        --set WINELOADER "${wine}/bin/wine" \
+        --set WINESERVER "${wine}/bin/wineserver" \
+        --set WINEDLLPATH "${wineBase}/lib/wine"
+    done
 
-    # Install scalable icon
-    install -Dm644 $src/resources/autodesk_fusion.svg $out/share/icons/hicolor/scalable/apps/fusion360.svg
+    # Desktop entries and icons
+    install -Dm644 ${./fusion360.desktop} $out/share/applications/fusion360.desktop
+    install -Dm644 ${./adskidmgr-opener.desktop} $out/share/applications/adskidmgr-opener.desktop
+    install -Dm644 ${./resources/autodesk_fusion.svg} $out/share/icons/hicolor/scalable/apps/fusion360.svg
+    cp ${./adskidmgr-opener.desktop} $out/share/fusion360/adskidmgr-opener.desktop
 
     runHook postInstall
   '';
@@ -102,11 +177,8 @@ stdenvNoCC.mkDerivation rec {
     platforms = [ "x86_64-linux" ];
     mainProgram = "fusion360";
     longDescription = ''
-      Nix wrapper that manages and runs Autodesk Fusion 360 in an isolated Wine prefix
-      under $XDG_DATA_HOME/fusion360. Fusion itself is downloaded directly from Autodesk
-      on first run and requires your own Autodesk account and license.
-      Installer logic is adapted from cryinkfly's Autodesk-Fusion-360-on-Linux
-      and packaging architecture inspired by mrshmllow/affinity-nix.
+      Nix wrapper directly fetching and patching Autodesk-Fusion-360-on-Linux
+      to run Autodesk Fusion 360 in an isolated Wine prefix under $XDG_DATA_HOME/fusion360.
     '';
   };
 }
