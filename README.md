@@ -167,4 +167,4 @@ fusion360 idmgr <URL>    # Handles adskidmgr:// SSO callback URLs
 
 ## License
 
-MIT License. See [LICENSE](LICENSE) for details. Autodesk Fusion 360, WebView2, and related components are proprietary software owned by their respective copyright holders.
+GNU AGPLv3. See [LICENSE](LICENSE) for details. Original MIT notices are retained in [NOTICE-MIT](NOTICE-MIT). Autodesk Fusion 360, WebView2, and related components are proprietary software owned by their respective copyright holders.
