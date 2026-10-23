@@ -153,17 +153,13 @@ EOF
       cp ${./resources/siappdll.dll} $out/share/fusion360/data/bin/siappdll-msvc.dll
     fi
 
-    # Inject runtime environment into standalone and sourced data scripts.
-    # Note: We do NOT use wrapProgram on these because wrapProgram replaces the script
-    # with an 'exec ...' wrapper, which terminates the parent shell when sourced (e.g. runner_update.sh).
+    # Inject PATH only. Do not pin WINE* to nixpkgs Wine: the launcher reads the
+    # runner from prefix.config, and --fusion-wine must use its own binaries/DLLs.
+    # wrapProgram is not used here because it replaces the script with exec and
+    # would terminate the parent shell when sourced (e.g. runner_update.sh).
     for script in $out/share/fusion360/installer.sh $out/share/fusion360/data/bin/*.sh; do
       sed -i '2i \
 export PATH="${runtimePath}:$PATH"\
-export WINE="${wine}/bin/wine"\
-export WINE64="${wine}/bin/wine64"\
-export WINELOADER="${wine}/bin/wine"\
-export WINESERVER="${wine}/bin/wineserver"\
-export WINEDLLPATH="${wineBase}/lib/wine"\
 ' "$script"
     done
 
@@ -173,12 +169,7 @@ export WINEDLLPATH="${wineBase}/lib/wine"\
       --replace-fail "@SHARE_DIR@" "$out/share/fusion360"
 
     wrapProgram $out/bin/fusion360 \
-      --prefix PATH : "${runtimePath}" \
-      --set WINE "${wine}/bin/wine" \
-      --set WINE64 "${wine}/bin/wine64" \
-      --set WINELOADER "${wine}/bin/wine" \
-      --set WINESERVER "${wine}/bin/wineserver" \
-      --set WINEDLLPATH "${wineBase}/lib/wine"
+      --prefix PATH : "${runtimePath}"
 
     # Desktop entries and icons
     install -Dm644 ${./fusion360.desktop} $out/share/applications/fusion360.desktop

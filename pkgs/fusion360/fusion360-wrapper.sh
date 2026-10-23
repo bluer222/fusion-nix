@@ -50,13 +50,85 @@ ensure_structure() {
         cat > "$DATA_DIR/logs/$pfx/prefix.config" <<EOF
 DXVK
 $DATA_DIR/wineprefixes/$pfx
---wine
-wine
-wineserver
+--fusion-wine
+$DATA_DIR/fusion-wine-build/bin/wine
+$DATA_DIR/fusion-wine-build/bin/wineserver
 EOF
       fi
     fi
   fi
+}
+
+# Upstream's recommended runner: patched Wine with winex11-owned-tool-windows
+# (Z-window fix). Downloaded on first use into $DATA_DIR/fusion-wine-build.
+ensure_fusion_wine() {
+  local build="$DATA_DIR/fusion-wine-build"
+  if [[ ! -x "$build/bin/wine" ]]; then
+    echo "[info] Downloading upstream fusion-wine (Z-window runtime)..."
+    # runner_update.sh sets AUTODESK_ROOT_DIRECTORY from FUSION360_DATA_DIR
+    # shellcheck disable=SC1091
+    source "$DATA_DIR/bin/runner_update.sh"
+    if ! runner_download "fusion-wine-build" "$build"; then
+      echo "[warn] Could not download fusion-wine-build; keeping current Wine runner"
+      return 1
+    fi
+  fi
+  migrate_prefix_to_fusion_wine
+}
+
+migrate_prefix_to_fusion_wine() {
+  local build="$DATA_DIR/fusion-wine-build"
+  [[ -x "$build/bin/wine" ]] || return 0
+  local active_log="$DATA_DIR/logs/active_fusion.log"
+  [[ -f "$active_log" ]] || return 0
+  local pfx_name config
+  pfx_name="$(cat "$active_log" 2>/dev/null || true)"
+  config="$DATA_DIR/logs/$pfx_name/prefix.config"
+  [[ -f "$config" ]] || return 0
+  local runner
+  runner="$(awk 'NR == 3' "$config" 2>/dev/null || true)"
+  [[ "$runner" == "--wine" ]] || return 0
+  local tmp
+  tmp="$(mktemp)"
+  awk -v wine="$build/bin/wine" -v wineserver="$build/bin/wineserver" '
+    NR == 3 { print "--fusion-wine"; next }
+    NR == 4 { print wine; next }
+    NR == 5 { print wineserver; next }
+    { print }
+  ' "$config" > "$tmp"
+  mv "$tmp" "$config"
+}
+
+prefix_wine() {
+  local pfx_name config winebin
+  if [[ -f "$DATA_DIR/logs/active_fusion.log" ]]; then
+    pfx_name="$(cat "$DATA_DIR/logs/active_fusion.log" 2>/dev/null || true)"
+    config="$DATA_DIR/logs/$pfx_name/prefix.config"
+    if [[ -f "$config" ]]; then
+      winebin="$(awk 'NR == 4' "$config" 2>/dev/null || true)"
+      if [[ -n "$winebin" ]]; then
+        echo "$winebin"
+        return 0
+      fi
+    fi
+  fi
+  echo "wine"
+}
+
+prefix_wineserver() {
+  local pfx_name config wineserver
+  if [[ -f "$DATA_DIR/logs/active_fusion.log" ]]; then
+    pfx_name="$(cat "$DATA_DIR/logs/active_fusion.log" 2>/dev/null || true)"
+    config="$DATA_DIR/logs/$pfx_name/prefix.config"
+    if [[ -f "$config" ]]; then
+      wineserver="$(awk 'NR == 5' "$config" 2>/dev/null || true)"
+      if [[ -n "$wineserver" ]]; then
+        echo "$wineserver"
+        return 0
+      fi
+    fi
+  fi
+  echo "wineserver"
 }
 
 get_active_prefix() {
@@ -104,12 +176,14 @@ register_desktop_handlers() {
 do_install() {
   ensure_structure
   register_desktop_handlers
-  "$SHARE_DIR/installer.sh" --install fusion --wine --safe --refresh-forcer "$@"
+  ensure_fusion_wine || true
+  "$SHARE_DIR/installer.sh" --install fusion --fusion-wine --safe --refresh-forcer "$@"
 }
 
 do_launch() {
   ensure_structure
   register_desktop_handlers
+  ensure_fusion_wine || true
   if ! is_installed; then
     echo "[info] Fusion 360 is not installed yet. Starting installation..."
     do_install
@@ -164,6 +238,9 @@ do_uninstall() {
   fi
 
   wineserver -k 2>/dev/null || true
+  if [[ -x "$DATA_DIR/fusion-wine-build/bin/wineserver" ]]; then
+    "$DATA_DIR/fusion-wine-build/bin/wineserver" -k 2>/dev/null || true
+  fi
   rm -rf "$DATA_DIR"
   echo "Successfully removed $DATA_DIR"
 }
@@ -207,20 +284,24 @@ main() {
       exec "$DATA_DIR/bin/adskidmgr-opener.sh" "$@" ;;
     wine)
       shift; ensure_structure
+      ensure_fusion_wine || true
       local pfx; pfx="$(get_active_prefix)"
-      WINEPREFIX="$pfx" exec wine "$@" ;;
+      WINEPREFIX="$pfx" exec "$(prefix_wine)" "$@" ;;
     winetricks)
       shift; ensure_structure
+      ensure_fusion_wine || true
       local pfx; pfx="$(get_active_prefix)"
-      WINEPREFIX="$pfx" exec winetricks "$@" ;;
+      WINEPREFIX="$pfx" WINE="$(prefix_wine)" WINESERVER="$(prefix_wineserver)" exec winetricks "$@" ;;
     winecfg)
       shift; ensure_structure
+      ensure_fusion_wine || true
       local pfx; pfx="$(get_active_prefix)"
-      WINEPREFIX="$pfx" exec wine winecfg "$@" ;;
+      WINEPREFIX="$pfx" exec "$(prefix_wine)" winecfg "$@" ;;
     wineserver)
       shift; ensure_structure
+      ensure_fusion_wine || true
       local pfx; pfx="$(get_active_prefix)"
-      WINEPREFIX="$pfx" exec wineserver "$@" ;;
+      WINEPREFIX="$pfx" exec "$(prefix_wineserver)" "$@" ;;
     uninstall)
       shift; do_uninstall "$@" ;;
     *)
