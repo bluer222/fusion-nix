@@ -95,15 +95,10 @@ stdenvNoCC.mkDerivation rec {
 
     # Fusion360.exe can return after login while identity/Qt keep the session.
     # wineserver -k here is what closed Fusion once the main window appeared.
-    substituteInPlace files/setup/data/autodesk_fusion_launcher.sh \
-      --replace-fail '    wait "$WINEPID"
-
-    WINEPREFIX="$WINE_PFX" "$WINESERVER" -k' \
-                     '    wait "$WINEPID" || true
-    while pgrep -f "[F]usion360.exe|[Q]tWebEngineProcess.exe|[A]dskIdentityManager.exe" >/dev/null 2>&1; do
-        sleep 1
-    done
-    WINEPREFIX="$WINE_PFX" "$WINESERVER" -k'
+    # sed: multiline substituteInPlace loses indent inside Nix indented strings.
+    sed -i 's#wait "$WINEPID"#wait "$WINEPID" || true\n    while pgrep -f "[F]usion360.exe|[Q]tWebEngineProcess.exe|[A]dskIdentityManager.exe" >/dev/null 2>\&1; do\n        sleep 1\n    done#' \
+      files/setup/data/autodesk_fusion_launcher.sh
+    grep -q 'wait "$WINEPID" || true' files/setup/data/autodesk_fusion_launcher.sh
 
     # 2. Stub out package manager and distro checks in installer
     sed -i \
