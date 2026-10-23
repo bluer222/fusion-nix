@@ -8,6 +8,24 @@ export AUTODESK_ROOT_DIRECTORY="$DATA_DIR"
 
 SHARE_DIR="@SHARE_DIR@"
 
+# Hybrid Intel/NVIDIA: NVIDIA EGL/ICD is a stub here and DXVK dies. Prefer Intel.
+if [[ -z "${VK_ICD_FILENAMES:-}" ]]; then
+  intel_vk=/run/opengl-driver/share/vulkan/icd.d/intel_icd.x86_64.json
+  nvidia_vk=/run/opengl-driver/share/vulkan/icd.d/nvidia_icd.json
+  mesa_egl=/run/opengl-driver/share/glvnd/egl_vendor.d/50_mesa.json
+  if [[ -r "$intel_vk" && -r "$nvidia_vk" ]]; then
+    export VK_ICD_FILENAMES="$intel_vk"
+    export VK_DRIVER_FILES="$intel_vk"
+    [[ -r "$mesa_egl" ]] && export __EGL_VENDOR_LIBRARY_FILENAMES="$mesa_egl"
+    export __GLX_VENDOR_LIBRARY_NAME="${__GLX_VENDOR_LIBRARY_NAME:-mesa}"
+  fi
+fi
+
+# fusion-wine is a prebuilt FHS tree; on NixOS it needs steam-run for libX11/Vulkan.
+if [[ -z "${STEAM_RUNTIME:-}" ]] && command -v steam-run >/dev/null 2>&1; then
+  exec steam-run "$0" "$@"
+fi
+
 ensure_structure() {
   mkdir -p "$DATA_DIR/bin" \
            "$DATA_DIR/downloads/DXVK" \

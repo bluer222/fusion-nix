@@ -93,6 +93,18 @@ stdenvNoCC.mkDerivation rec {
       --replace-fail '"$AUTODESK_ROOT_DIRECTORY/bin/spconvd"' \
                      '[[ -x "$AUTODESK_ROOT_DIRECTORY/bin/spconvd" ]] && "$AUTODESK_ROOT_DIRECTORY/bin/spconvd" 2>/dev/null || true'
 
+    # Fusion360.exe can return after login while identity/Qt keep the session.
+    # wineserver -k here is what closed Fusion once the main window appeared.
+    substituteInPlace files/setup/data/autodesk_fusion_launcher.sh \
+      --replace-fail '    wait "$WINEPID"
+
+    WINEPREFIX="$WINE_PFX" "$WINESERVER" -k' \
+                     '    wait "$WINEPID" || true
+    while pgrep -f "[F]usion360.exe|[Q]tWebEngineProcess.exe|[A]dskIdentityManager.exe" >/dev/null 2>&1; do
+        sleep 1
+    done
+    WINEPREFIX="$WINE_PFX" "$WINESERVER" -k'
+
     # 2. Stub out package manager and distro checks in installer
     sed -i \
       -e 's|check_required_packages() {|check_required_packages() { return 0; }\n_orig_check_required_packages() {|' \
