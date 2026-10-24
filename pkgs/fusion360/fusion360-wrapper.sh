@@ -22,7 +22,9 @@ if [[ -z "${VK_ICD_FILENAMES:-}" ]]; then
 fi
 
 # fusion-wine is a prebuilt FHS tree; on NixOS it needs steam-run for libX11/Vulkan.
-if [[ -z "${STEAM_RUNTIME:-}" ]] && command -v steam-run >/dev/null 2>&1; then
+# steam-run leaves STEAM_RUNTIME unset, so mark our re-exec to avoid nesting.
+if [[ -z "${FUSION360_IN_FHS:-}" && -z "${STEAM_RUNTIME:-}" ]] && command -v steam-run >/dev/null 2>&1; then
+  export FUSION360_IN_FHS=1
   exec steam-run "$0" "$@"
 fi
 
