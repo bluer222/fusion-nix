@@ -14,7 +14,7 @@ This Nix package directly fetches and patches the active upstream [Autodesk-Fusi
 ## How It Works
 
 - **Prefix Management**: `fusion360` initializes an isolated Wine prefix in `$XDG_DATA_HOME/fusion360/wineprefixes/default` (defaults to `~/.local/share/fusion360`).
-- **Patched Wine (Z-window)**: Uses upstream's `--fusion-wine` runner (`fusion-wine-build`, including `winex11-owned-tool-windows`) so Fusion palettes are WM-managed utility windows. The runtime is downloaded on first launch into `$FUSION360_DATA_DIR/fusion-wine-build`.
+- **Wine runtime**: Uses Nixpkgs Wine with its matching loader, server, and DLLs. Existing `fusion-wine` prefixes switch back to Nixpkgs Wine on launch, preserving the installation and saving the previous runner configuration as `prefix.config.fusion-wine.bak`.
 - **Sandbox Isolation**: Uses `winetricks sandbox` to isolate the Wine prefix from your `$HOME` directory so Windows installers do not create arbitrary folders or symlinks across user storage.
 - **Runtime Dependencies**: Installs required Wine dependencies (`atmlib`, `gdiplus`, `corefonts`, `cjkfonts`, `dotnet20`, `dotnet48`, `msxml4`, `msxml6`, `vcrun2022`, `fontsmooth=rgb`, `winhttp`, and sets version to `win11`).
 - **WebView2 & Authentication**: Installs a pinned Microsoft Edge WebView2 Evergreen runtime (v109, the Wine-tested build) with registry overrides for Windows 7 compatibility mode and disabled background updates.

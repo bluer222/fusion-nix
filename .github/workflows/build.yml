@@ -15,8 +15,8 @@ jobs:
       - name: Shell syntax check
         run: |
           bash -n pkgs/fusion360/fusion360-wrapper.sh
-      - name: Test steam-run re-entry
-        run: bash tests/steam-run.sh
+      - name: Test launcher and runner migration
+        run: bash tests/launcher.sh
       - name: Evaluate flake (no build)
         run: |
           nix flake check --no-build

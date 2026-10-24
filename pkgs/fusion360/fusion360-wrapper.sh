@@ -8,26 +8,6 @@ export AUTODESK_ROOT_DIRECTORY="$DATA_DIR"
 
 SHARE_DIR="@SHARE_DIR@"
 
-# Hybrid Intel/NVIDIA: NVIDIA EGL/ICD is a stub here and DXVK dies. Prefer Intel.
-if [[ -z "${VK_ICD_FILENAMES:-}" ]]; then
-  intel_vk=/run/opengl-driver/share/vulkan/icd.d/intel_icd.x86_64.json
-  nvidia_vk=/run/opengl-driver/share/vulkan/icd.d/nvidia_icd.json
-  mesa_egl=/run/opengl-driver/share/glvnd/egl_vendor.d/50_mesa.json
-  if [[ -r "$intel_vk" && -r "$nvidia_vk" ]]; then
-    export VK_ICD_FILENAMES="$intel_vk"
-    export VK_DRIVER_FILES="$intel_vk"
-    [[ -r "$mesa_egl" ]] && export __EGL_VENDOR_LIBRARY_FILENAMES="$mesa_egl"
-    export __GLX_VENDOR_LIBRARY_NAME="${__GLX_VENDOR_LIBRARY_NAME:-mesa}"
-  fi
-fi
-
-# fusion-wine is a prebuilt FHS tree; on NixOS it needs steam-run for libX11/Vulkan.
-# steam-run leaves STEAM_RUNTIME unset, so mark our re-exec to avoid nesting.
-if [[ -z "${FUSION360_IN_FHS:-}" && -z "${STEAM_RUNTIME:-}" ]] && command -v steam-run >/dev/null 2>&1; then
-  export FUSION360_IN_FHS=1
-  exec steam-run "$0" "$@"
-fi
-
 ensure_structure() {
   mkdir -p "$DATA_DIR/bin" \
            "$DATA_DIR/downloads/DXVK" \
@@ -70,35 +50,17 @@ ensure_structure() {
         cat > "$DATA_DIR/logs/$pfx/prefix.config" <<EOF
 DXVK
 $DATA_DIR/wineprefixes/$pfx
---fusion-wine
-$DATA_DIR/fusion-wine-build/bin/wine
-$DATA_DIR/fusion-wine-build/bin/wineserver
+--wine
+wine
+wineserver
 EOF
       fi
     fi
   fi
+  migrate_prefix_to_system_wine
 }
 
-# Upstream's recommended runner: patched Wine with winex11-owned-tool-windows
-# (Z-window fix). Downloaded on first use into $DATA_DIR/fusion-wine-build.
-ensure_fusion_wine() {
-  local build="$DATA_DIR/fusion-wine-build"
-  if [[ ! -x "$build/bin/wine" ]]; then
-    echo "[info] Downloading upstream fusion-wine (Z-window runtime)..."
-    # runner_update.sh sets AUTODESK_ROOT_DIRECTORY from FUSION360_DATA_DIR
-    # shellcheck disable=SC1091
-    source "$DATA_DIR/bin/runner_update.sh"
-    if ! runner_download "fusion-wine-build" "$build"; then
-      echo "[warn] Could not download fusion-wine-build; keeping current Wine runner"
-      return 1
-    fi
-  fi
-  migrate_prefix_to_fusion_wine
-}
-
-migrate_prefix_to_fusion_wine() {
-  local build="$DATA_DIR/fusion-wine-build"
-  [[ -x "$build/bin/wine" ]] || return 0
+migrate_prefix_to_system_wine() {
   local active_log="$DATA_DIR/logs/active_fusion.log"
   [[ -f "$active_log" ]] || return 0
   local pfx_name config
@@ -107,13 +69,17 @@ migrate_prefix_to_fusion_wine() {
   [[ -f "$config" ]] || return 0
   local runner
   runner="$(awk 'NR == 3' "$config" 2>/dev/null || true)"
-  [[ "$runner" == "--wine" ]] || return 0
+  [[ "$runner" == "--fusion-wine" ]] || return 0
+  # Preserve the previous runner configuration while keeping the installed prefix.
+  if [[ ! -e "$config.fusion-wine.bak" ]]; then
+    cp "$config" "$config.fusion-wine.bak"
+  fi
   local tmp
-  tmp="$(mktemp)"
-  awk -v wine="$build/bin/wine" -v wineserver="$build/bin/wineserver" '
-    NR == 3 { print "--fusion-wine"; next }
-    NR == 4 { print wine; next }
-    NR == 5 { print wineserver; next }
+  tmp="$(mktemp "$config.XXXXXX")"
+  awk '
+    NR == 3 { print "--wine"; next }
+    NR == 4 { print "wine"; next }
+    NR == 5 { print "wineserver"; next }
     { print }
   ' "$config" > "$tmp"
   mv "$tmp" "$config"
@@ -196,14 +162,12 @@ register_desktop_handlers() {
 do_install() {
   ensure_structure
   register_desktop_handlers
-  ensure_fusion_wine || true
-  "$SHARE_DIR/installer.sh" --install fusion --fusion-wine --safe --refresh-forcer "$@"
+  "$SHARE_DIR/installer.sh" --install fusion --wine --safe --refresh-forcer "$@"
 }
 
 do_launch() {
   ensure_structure
   register_desktop_handlers
-  ensure_fusion_wine || true
   if ! is_installed; then
     echo "[info] Fusion 360 is not installed yet. Starting installation..."
     do_install
@@ -258,9 +222,6 @@ do_uninstall() {
   fi
 
   wineserver -k 2>/dev/null || true
-  if [[ -x "$DATA_DIR/fusion-wine-build/bin/wineserver" ]]; then
-    "$DATA_DIR/fusion-wine-build/bin/wineserver" -k 2>/dev/null || true
-  fi
   rm -rf "$DATA_DIR"
   echo "Successfully removed $DATA_DIR"
 }
@@ -304,22 +265,18 @@ main() {
       exec "$DATA_DIR/bin/adskidmgr-opener.sh" "$@" ;;
     wine)
       shift; ensure_structure
-      ensure_fusion_wine || true
       local pfx; pfx="$(get_active_prefix)"
       WINEPREFIX="$pfx" exec "$(prefix_wine)" "$@" ;;
     winetricks)
       shift; ensure_structure
-      ensure_fusion_wine || true
       local pfx; pfx="$(get_active_prefix)"
       WINEPREFIX="$pfx" WINE="$(prefix_wine)" WINESERVER="$(prefix_wineserver)" exec winetricks "$@" ;;
     winecfg)
       shift; ensure_structure
-      ensure_fusion_wine || true
       local pfx; pfx="$(get_active_prefix)"
       WINEPREFIX="$pfx" exec "$(prefix_wine)" winecfg "$@" ;;
     wineserver)
       shift; ensure_structure
-      ensure_fusion_wine || true
       local pfx; pfx="$(get_active_prefix)"
       WINEPREFIX="$pfx" exec "$(prefix_wineserver)" "$@" ;;
     uninstall)
