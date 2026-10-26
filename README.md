@@ -100,6 +100,7 @@ fusion360
 fusion360                # Launch Fusion 360 (installs automatically on first run)
 fusion360 run [args...]  # Launch Fusion 360 with arguments passed to Fusion360.exe
 fusion360 install        # Run the upstream installer directly
+fusion360 update         # Update Fusion inside the active Wine prefix
 fusion360 status         # Show active prefix, Wine version, and installation status
 fusion360 fix-navbar     # Run upstream navigation bar flicker fix
 fusion360 uninstall      # Interactive uninstaller (deletes the data directory)
@@ -114,6 +115,23 @@ fusion360 wineserver     # Send commands to wineserver for the Fusion prefix
 # Protocol Handler (Invoked automatically by your browser during login):
 fusion360 idmgr <URL>    # Handles adskidmgr:// SSO callback URLs
 ```
+
+### Updating Fusion
+
+Close Fusion, then run:
+
+```bash
+fusion360 update
+fusion360
+```
+
+This downloads a fresh Autodesk installer and updates the active Wine prefix,
+preserving its settings and login data. It reapplies the SpaceMouse and
+`DeviceSettingsProvider.dll` fixes after updating. Installer output is saved to
+`$FUSION360_DATA_DIR/logs/fusion-update.log`.
+
+Use `fusion360 install` for a new installation in a separate prefix. Updating
+your Nix package updates the wrapper and Wine runtime separately from Fusion.
 
 ### Environment Overrides
 

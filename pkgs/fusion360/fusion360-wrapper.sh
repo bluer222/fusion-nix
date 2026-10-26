@@ -165,6 +165,61 @@ do_install() {
   "$SHARE_DIR/installer.sh" --install fusion --wine --safe --refresh-forcer "$@"
 }
 
+do_update() (
+  ensure_structure
+  local pfx launcher installer log status dll target
+  pfx="$(get_active_prefix 2>/dev/null || true)"
+  launcher="$(find_launcher)"
+  if [[ -z "$pfx" || -z "$launcher" ]]; then
+    echo "[error] No Fusion installation in the active prefix. Run 'fusion360 install' first." >&2
+    return 1
+  fi
+
+  log="$DATA_DIR/logs/fusion-update.log"
+  # Keep the executable on C: even when winetricks sandbox removes the Z: drive.
+  installer="$(mktemp --suffix=.exe "$pfx/drive_c/FusionUpdate.XXXXXX")"
+  trap 'rm -f "$installer"' EXIT
+  echo "[info] Downloading the latest Fusion installer..."
+  curl --fail --location --retry 3 \
+    "${FUSION360_INSTALLER_URL:-https://dl.appstreaming.autodesk.com/production/installers/Fusion%20Admin%20Install.exe}" \
+    --output "$installer"
+  if [[ ! -s "$installer" ]]; then
+    echo "[error] Downloaded Fusion installer is empty." >&2
+    return 1
+  fi
+
+  echo "[info] Updating Fusion in $pfx. Close Fusion before updating. Log: $log"
+  if WINEPREFIX="$pfx" WINESERVER="$(prefix_wineserver)" \
+    "$(prefix_wine)" "$installer" --process update --quiet > "$log" 2>&1; then
+    :
+  else
+    status=$?
+    echo "[error] Fusion update failed (exit $status). See $log" >&2
+    return "$status"
+  fi
+
+  # Updates install a new version directory, so its DLL fixes must be reapplied.
+  launcher="$(find_launcher)"
+  if [[ -z "$launcher" ]]; then
+    echo "[error] Fusion executable not found after updating. See $log" >&2
+    return 1
+  fi
+  target="$(dirname "$launcher")/siappdll.dll"
+  if [[ -f "$DATA_DIR/bin/siappdll-msvc.dll" ]]; then
+    if [[ -f "$target" && ! -L "$target" ]]; then
+      mv -f "$target" "$target.bak"
+    fi
+    ln -sf "$DATA_DIR/bin/siappdll-msvc.dll" "$target"
+  fi
+  while IFS= read -r -d '' dll; do
+    target="$(dirname "$(dirname "$dll")")/DeviceSettingsProvider.dll"
+    if [[ ! -e "$target" ]]; then
+      ln -sf "$dll" "$target"
+    fi
+  done < <(find "$(dirname "$launcher")" -path '*/ADPCER/DeviceSettingsProvider.dll' -print0)
+  echo "[info] Fusion update completed in the existing prefix. Run 'fusion360' to launch."
+)
+
 do_launch() {
   ensure_structure
   register_desktop_handlers
@@ -241,6 +296,7 @@ main() {
       echo "Commands:"
       echo "  (no args)             Launch Fusion 360 (installs on first run)"
       echo "  install               Run upstream installer directly"
+      echo "  update                Update Fusion inside the active prefix"
       echo "  run [ARGS...]         Launch Fusion 360 passing extra arguments"
       echo "  status                Display installation and prefix status"
       echo "  fix-navbar            Run upstream navigation bar flicker fix"
@@ -253,6 +309,8 @@ main() {
       ;;
     install)
       shift; do_install "$@" ;;
+    update)
+      do_update ;;
     run)
       shift; do_launch "$@" ;;
     status)

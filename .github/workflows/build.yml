@@ -17,6 +17,8 @@ jobs:
           bash -n pkgs/fusion360/fusion360-wrapper.sh
       - name: Test launcher and runner migration
         run: bash tests/launcher.sh
+      - name: Test updates in the active prefix
+        run: bash tests/update.sh
       - name: Evaluate flake (no build)
         run: |
           nix flake check --no-build
